@@ -1,3 +1,3 @@
 # Github-Profile-Explorer
 A modern and responsive GitHub Profile Explorer . Search any GitHub username and explore profile details, repositories, followers, following, stars, and more using the GitHub REST API.
-Live Demo: https://ali-s-pattekari.github.io/Github-Profile-Explorer/?user=ali-s-pattekari
+Live Demo: https://ali-s-pattekari.github.io/Github-Profile-Explorer/
