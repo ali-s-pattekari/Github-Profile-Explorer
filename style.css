@@ -1,506 +1,778 @@
 /* =========================================================
-   GitView — design tokens
+   GitView — script.js
+   GitHub REST API profile explorer. Vanilla JS, no frameworks.
    ========================================================= */
-:root{
-  --bg: #0F1115;
-  --surface: #171A21;
-  --surface-2: #1E222B;
-  --surface-hover: #242935;
-  --text: #E8EAED;
-  --muted: #8B92A3;
-  --muted-2: #5B6270;
-  --border: #262B35;
-  --border-strong: #363C49;
 
-  --primary: #5EEAD4;
-  --primary-dim: #2DD4BF;
-  --primary-ink: #06201C;
-  --danger: #F87171;
-  --danger-bg: #2A1618;
-  --success: #34D399;
-  --warn: #FBBF24;
+const API_BASE = 'https://api.github.com';
 
-  --font-display: 'JetBrains Mono', ui-monospace, monospace;
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+/* ---------- state ---------- */
+const state = {
+  currentUser: null,       // raw /users/{username} response
+  repos: [],                // raw /users/{username}/repos response
+  visibleRepoCount: 12,
+  repoPageSize: 12,
+  repoSort: 'updated',
+  repoFilter: '',
+  favorites: loadJSON('gitview:favorites', []),
+  history: loadJSON('gitview:history', []),
+  userCache: {}             // username(lowercase) -> {user, repos, ts}
+};
 
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+/* ---------- DOM refs ---------- */
+const el = {};
+[
+  'nav','navLinks','hamburger','themeToggle','iconMoon','iconSun',
+  'searchForm','usernameInput','searchError','heroSection',
+  'recentStrip','recentChips',
+  'results','skeletonWrap','profileCard','statsGrid','insightsSection','reposSection','errorState',
+  'pAvatar','pName','pLogin','pBio','pMeta','viewGithubBtn','favBtn','favIcon','favLabel','copyLinkBtn',
+  'statRepos','statFollowers','statFollowing','statGists',
+  'langBars','langEmpty','insightsList',
+  'repoCountPill','repoFilterInput','repoSort','repoGrid','repoEmpty','loadMoreBtn',
+  'errorTitle','errorBody',
+  'favCount','favoritesGrid','favEmptyNote',
+  'historyList','historyEmptyNote','clearHistoryBtn',
+  'compareForm','compareUserA','compareUserB','compareError','compareSkel','compareResult',
+  'backToTop','toast','main'
+].forEach(id => { el[id] = document.getElementById(id); });
 
-  --shadow-1: 0 1px 0 rgba(0,0,0,.4);
-  --max-w: 1120px;
+const LANGUAGE_COLORS = {
+  JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
+  'C++': '#f34b7d', C: '#555555', 'C#': '#178600', PHP: '#4F5D95', Ruby: '#701516',
+  Go: '#00ADD8', Rust: '#dea584', Swift: '#F05138', Kotlin: '#A97BFF', HTML: '#e34c26',
+  CSS: '#563d7c', Shell: '#89e051', Vue: '#41b883', Dart: '#00B4AB', Scala: '#c22d40',
+  Elixir: '#6e4a7e', Haskell: '#5e5086', Lua: '#000080', Perl: '#0298c3', R: '#198CE7',
+  ObjectiveC: '#438eff', Jupyter: '#DA5B0B'
+};
+function langColor(name){ return LANGUAGE_COLORS[name] || '#8B92A3'; }
 
-  color-scheme: dark;
+/* =========================================================
+   Utilities
+   ========================================================= */
+function loadJSON(key, fallback){
+  try{
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  }catch(e){ return fallback; }
 }
-
-[data-theme="light"]{
-  --bg: #F7F7F5;
-  --surface: #FFFFFF;
-  --surface-2: #F0F1EE;
-  --surface-hover: #EAEBE7;
-  --text: #14161B;
-  --muted: #5B6270;
-  --muted-2: #8B92A3;
-  --border: #E1E2DE;
-  --border-strong: #CBCDC7;
-
-  --primary-ink: #06201C;
-  --danger-bg: #FCEBEB;
-
-  color-scheme: light;
+function saveJSON(key, value){
+  try{ localStorage.setItem(key, JSON.stringify(value)); }
+  catch(e){ /* storage unavailable — fail silently, app still works */ }
+}
+function formatNumber(n){
+  if(n === null || n === undefined || Number.isNaN(n)) return '0';
+  if(n >= 1000000) return (n/1000000).toFixed(1).replace(/\.0$/,'') + 'M';
+  if(n >= 1000) return (n/1000).toFixed(1).replace(/\.0$/,'') + 'K';
+  return n.toLocaleString('en-US');
+}
+function timeAgo(dateStr){
+  if(!dateStr) return '';
+  const then = new Date(dateStr).getTime();
+  const diff = Math.max(0, Date.now() - then);
+  const mins = Math.floor(diff/60000);
+  if(mins < 1) return 'just now';
+  if(mins < 60) return `${mins} minute${mins===1?'':'s'} ago`;
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return `${hrs} hour${hrs===1?'':'s'} ago`;
+  const days = Math.floor(hrs/24);
+  if(days < 30) return `${days} day${days===1?'':'s'} ago`;
+  const months = Math.floor(days/30);
+  if(months < 12) return `${months} month${months===1?'':'s'} ago`;
+  const years = Math.floor(months/12);
+  return `${years} year${years===1?'':'s'} ago`;
+}
+function formatJoinDate(dateStr){
+  if(!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+function escapeHTML(str){
+  const d = document.createElement('div');
+  d.textContent = str ?? '';
+  return d.innerHTML;
+}
+function showToast(msg){
+  el.toast.textContent = msg;
+  el.toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.toast.classList.remove('show'), 2200);
+}
+function isValidUsername(u){
+  return /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/.test(u);
 }
 
 /* =========================================================
-   Reset
+   GitHub API layer
    ========================================================= */
-*, *::before, *::after{ box-sizing: border-box; }
-html{ scroll-behavior: smooth; }
-body{
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-body);
-  font-size: 16px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  transition: background .2s ease, color .2s ease;
-}
-img{ max-width: 100%; display: block; }
-a{ color: inherit; }
-button{ font: inherit; color: inherit; }
-ul{ list-style: none; margin: 0; padding: 0; }
-h1,h2,h3,dl,p{ margin: 0; }
-input, select{ font: inherit; color: inherit; }
+async function githubFetch(path){
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Accept: 'application/vnd.github+json' }
+  });
 
-.skip-link{
-  position: absolute; left: -999px; top: 0;
-  background: var(--primary); color: var(--primary-ink);
-  padding: 10px 16px; z-index: 200; border-radius: 0 0 var(--radius-sm) 0;
-}
-.skip-link:focus{ left: 0; }
-
-:focus-visible{
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce){
-  *{ animation-duration: .001ms !important; transition-duration: .001ms !important; }
-}
-
-/* =========================================================
-   Nav
-   ========================================================= */
-.nav{
-  position: sticky; top: 0; z-index: 100;
-  border-bottom: 1px solid var(--border);
-}
-/* The blur lives on a ::before layer, not on .nav itself. If .nav carried
-   backdrop-filter directly, it would become the "containing block" for any
-   position:fixed descendant — including the mobile .nav-links panel — which
-   pins that panel to the ~60px navbar height instead of the full screen and
-   makes it collapse to nothing when opened. Keeping the filter off .nav
-   avoids that trap while still giving the same frosted-glass look. */
-.nav::before{
-  content: "";
-  position: absolute; inset: 0;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(10px);
-  z-index: -1;
-}
-.nav-inner{
-  max-width: var(--max-w); margin: 0 auto;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 24px;
-  position: relative;
-}
-.brand{
-  display: flex; align-items: center; gap: 8px;
-  text-decoration: none; font-family: var(--font-display);
-  font-weight: 600; font-size: 17px; letter-spacing: -.02em;
-  background: none; border: none; cursor: pointer;
-}
-.brand-mark{ color: var(--primary); }
-.nav-links{
-  display: flex; align-items: center; gap: 4px;
-}
-.nav-link{
-  background: none; border: none; cursor: pointer;
-  color: var(--muted); padding: 8px 12px; border-radius: var(--radius-sm);
-  font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 6px;
-  transition: color .15s ease, background .15s ease;
-}
-.nav-link:hover{ color: var(--text); background: var(--surface-2); }
-.nav-link[aria-current="page"]{ color: var(--text); }
-.pill{
-  background: var(--surface-2); border: 1px solid var(--border);
-  color: var(--muted); font-family: var(--font-display);
-  font-size: 11px; padding: 1px 6px; border-radius: 20px; line-height: 1.6;
-}
-.nav-actions{ display: flex; align-items: center; gap: 6px; }
-.icon-btn{
-  background: none; border: 1px solid var(--border); cursor: pointer;
-  color: var(--text); width: 34px; height: 34px; border-radius: var(--radius-sm);
-  display: flex; align-items: center; justify-content: center;
-  transition: background .15s ease, border-color .15s ease;
-}
-.icon-btn:hover{ background: var(--surface-2); border-color: var(--border-strong); }
-.hamburger{
-  display: none; flex-direction: column; gap: 4px;
-  background: none; border: none; cursor: pointer; padding: 8px;
-}
-.hamburger span{ width: 20px; height: 2px; background: var(--text); border-radius: 2px; }
-
-/* =========================================================
-   Buttons / fields
-   ========================================================= */
-.btn{
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 9px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500;
-  border: 1px solid transparent; cursor: pointer; text-decoration: none;
-  transition: transform .1s ease, background .15s ease, border-color .15s ease;
-  white-space: nowrap;
-}
-.btn:active{ transform: translateY(1px); }
-.btn-primary{ background: var(--primary); color: var(--primary-ink); }
-.btn-primary:hover{ background: var(--primary-dim); }
-.btn-ghost{ background: transparent; border-color: var(--border); color: var(--text); }
-.btn-ghost:hover{ background: var(--surface-2); border-color: var(--border-strong); }
-.btn-ghost.active{ color: var(--primary); border-color: var(--primary); }
-
-.field-shell{
-  display: flex; align-items: center; gap: 8px;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 0 12px; height: 40px;
-}
-.field-shell:focus-within{ border-color: var(--primary); }
-.field-input{
-  flex: 1; background: none; border: none; outline: none; color: var(--text);
-  height: 100%; font-size: 14px;
-}
-.select-shell{
-  display: flex; align-items: center; gap: 8px;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 0 12px; height: 40px;
-}
-.select-label{ font-size: 13px; color: var(--muted); white-space: nowrap; }
-.select-shell select{
-  background: none; border: none; outline: none; color: var(--text);
-  height: 100%; font-size: 14px; cursor: pointer;
-}
-
-/* =========================================================
-   Hero
-   ========================================================= */
-.hero{ padding: 88px 24px 40px; }
-.hero-inner{ max-width: 720px; margin: 0 auto; text-align: left; }
-.hero-eyebrow{
-  font-family: var(--font-display); font-size: 13px; color: var(--muted-2);
-  margin-bottom: 18px;
-}
-.hero-title{
-  font-family: var(--font-display); font-weight: 600;
-  font-size: clamp(32px, 5vw, 52px); line-height: 1.08; letter-spacing: -.02em;
-  margin-bottom: 18px;
-}
-.hero-sub{
-  color: var(--muted); font-size: 17px; max-width: 56ch; margin-bottom: 32px;
-}
-
-.search-shell{
-  display: flex; align-items: center; gap: 10px;
-  background: var(--surface); border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md); padding: 6px 6px 6px 18px;
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.search-shell:focus-within{
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
-}
-.prompt-glyph{ color: var(--primary); font-family: var(--font-display); font-weight: 600; }
-.prompt-cmd{ color: var(--muted-2); font-family: var(--font-display); font-size: 14px; display: none; }
-@media (min-width: 560px){ .prompt-cmd{ display: inline; } }
-.search-input{
-  flex: 1; background: none; border: none; outline: none; color: var(--text);
-  font-family: var(--font-display); font-size: 16px; padding: 12px 4px; min-width: 0;
-}
-.search-input::placeholder{ color: var(--muted-2); }
-.search-btn{ height: 42px; padding: 0 18px; }
-
-.hero-hint{ margin-top: 14px; font-size: 13px; color: var(--muted-2); }
-.hint-link{
-  background: none; border: none; color: var(--primary); cursor: pointer;
-  font-size: 13px; padding: 0; text-decoration: underline; text-underline-offset: 3px;
-}
-.search-error{
-  margin-top: 16px; color: var(--danger); background: var(--danger-bg);
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  padding: 10px 14px; border-radius: var(--radius-sm); font-size: 14px; max-width: 560px;
-}
-
-/* Recent strip */
-.recent-strip{
-  max-width: var(--max-w); margin: 0 auto; padding: 0 24px 32px;
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-}
-.recent-label{ font-size: 12px; color: var(--muted-2); font-family: var(--font-display); }
-.recent-chips{ display: flex; gap: 8px; flex-wrap: wrap; }
-.chip{
-  background: var(--surface); border: 1px solid var(--border); color: var(--text);
-  font-size: 13px; padding: 6px 12px; border-radius: 20px; cursor: pointer;
-  font-family: var(--font-display);
-}
-.chip:hover{ border-color: var(--primary); color: var(--primary); }
-
-/* =========================================================
-   Results container
-   ========================================================= */
-.results{ max-width: var(--max-w); margin: 0 auto; padding: 0 24px 96px; }
-
-/* Skeleton */
-.skeleton-wrap{ display: flex; gap: 20px; padding: 28px 0; }
-.skel{
-  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 37%, var(--surface) 63%);
-  background-size: 400% 100%; animation: shimmer 1.4s ease infinite;
-  border-radius: var(--radius-sm);
-}
-@keyframes shimmer{ 0%{ background-position: 100% 0; } 100%{ background-position: -100% 0; } }
-.skel-avatar{ width: 96px; height: 96px; border-radius: 50%; flex-shrink: 0; }
-.skel-lines{ flex: 1; display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
-.skel-line{ height: 14px; }
-.w60{ width: 60%; } .w40{ width: 40%; } .w80{ width: 80%; }
-
-/* Profile card */
-.profile-card{
-  display: flex; gap: 24px; padding: 28px 0 32px; border-bottom: 1px solid var(--border);
-}
-.avatar{
-  width: 96px; height: 96px; border-radius: 50%; border: 1px solid var(--border-strong);
-  flex-shrink: 0; object-fit: cover;
-}
-.profile-main{ flex: 1; min-width: 0; }
-.profile-heading{
-  display: flex; justify-content: space-between; align-items: flex-start;
-  gap: 16px; flex-wrap: wrap;
-}
-.profile-name{ font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
-.profile-login{
-  color: var(--primary); text-decoration: none; font-size: 14px; font-family: var(--font-display);
-}
-.profile-login:hover{ text-decoration: underline; }
-.profile-actions{ display: flex; gap: 8px; flex-wrap: wrap; }
-.profile-bio{ color: var(--text); margin-top: 12px; max-width: 60ch; }
-.profile-meta{
-  display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px;
-  font-size: 14px; color: var(--muted);
-}
-.profile-meta li{ display: flex; align-items: center; gap: 6px; }
-.profile-meta a{ color: var(--muted); text-decoration: none; }
-.profile-meta a:hover{ color: var(--primary); }
-
-/* Stats grid */
-.stats-grid{
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
-  background: var(--border); border: 1px solid var(--border);
-  margin-top: 24px; border-radius: var(--radius-md); overflow: hidden;
-}
-.stat-card{
-  background: var(--surface); padding: 20px; display: flex; flex-direction: column; gap: 6px;
-}
-.stat-value{ font-family: var(--font-display); font-size: 26px; font-weight: 600; }
-.stat-label{ font-size: 13px; color: var(--muted); }
-@media (max-width: 640px){ .stats-grid{ grid-template-columns: repeat(2, 1fr); } }
-
-/* Panels (insights) */
-.panel-grid{
-  display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px; margin-top: 32px;
-}
-@media (max-width: 800px){ .panel-grid{ grid-template-columns: 1fr; } }
-.panel{
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 22px;
-}
-.panel-title{
-  font-family: var(--font-display); font-size: 15px; font-weight: 600;
-  margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
-}
-
-.lang-bars{ display: flex; flex-direction: column; gap: 12px; }
-.lang-row{ display: grid; grid-template-columns: 90px 1fr 48px; align-items: center; gap: 10px; }
-.lang-name{ font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lang-track{ height: 8px; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
-.lang-fill{ height: 100%; border-radius: 6px; }
-.lang-pct{ font-family: var(--font-display); font-size: 12px; color: var(--muted); text-align: right; }
-
-.kv-list{ display: flex; flex-direction: column; gap: 12px; }
-.kv-row{
-  display: flex; justify-content: space-between; align-items: baseline;
-  font-size: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
-}
-.kv-row:last-child{ border-bottom: none; padding-bottom: 0; }
-.kv-row dt{ color: var(--muted); }
-.kv-row dd{ margin: 0; font-family: var(--font-display); font-weight: 500; }
-
-/* Repos */
-.repos-section{ margin-top: 40px; }
-.repos-toolbar{
-  display: flex; justify-content: space-between; align-items: center; gap: 16px;
-  flex-wrap: wrap; margin-bottom: 20px;
-}
-.repos-controls{ display: flex; gap: 10px; flex-wrap: wrap; }
-.repo-grid{
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px;
-}
-.repo-card{
-  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
-  border-radius: var(--radius-md); padding: 18px; display: flex; flex-direction: column; gap: 10px;
-  transition: border-color .15s ease, background .15s ease;
-}
-.repo-card:hover{ background: var(--surface-hover); }
-.repo-head{ display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.repo-name{
-  font-family: var(--font-display); font-size: 14.5px; font-weight: 600; text-decoration: none;
-  color: var(--text); word-break: break-word;
-}
-.repo-name:hover{ color: var(--primary); }
-.repo-visibility{
-  font-size: 10.5px; color: var(--muted); border: 1px solid var(--border); padding: 1px 7px;
-  border-radius: 20px; flex-shrink: 0;
-}
-.repo-desc{ font-size: 13.5px; color: var(--muted); flex: 1; line-height: 1.5; }
-.repo-meta{ display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
-.lang-dot{ width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-.repo-updated{ font-size: 12px; color: var(--muted-2); }
-.repo-foot{ display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-.repo-link{
-  font-size: 12.5px; color: var(--primary); text-decoration: none; font-family: var(--font-display);
-}
-.repo-link:hover{ text-decoration: underline; }
-
-.load-more-wrap{ display: flex; justify-content: center; margin-top: 28px; }
-.empty-note{ color: var(--muted); font-size: 14px; padding: 20px 0; }
-
-/* Error / state card */
-.state-card{
-  border: 1px solid var(--border); border-radius: var(--radius-md); padding: 32px;
-  text-align: left; margin-top: 24px;
-}
-.state-error{ border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-bg); }
-.state-title{ font-family: var(--font-display); font-weight: 600; font-size: 16px; margin-bottom: 6px; }
-.state-body{ color: var(--muted); font-size: 14px; }
-
-/* =========================================================
-   Generic page views (favorites / history / compare / about)
-   ========================================================= */
-.view{ min-height: 40vh; }
-.page-head{
-  max-width: var(--max-w); margin: 0 auto; padding: 56px 24px 28px;
-}
-.page-head h2{ font-family: var(--font-display); font-size: 30px; font-weight: 600; margin-bottom: 10px; }
-.page-head p{ color: var(--muted); max-width: 60ch; }
-.page-head .btn{ margin-top: 16px; }
-
-.favorites-grid{
-  max-width: var(--max-w); margin: 0 auto; padding: 0 24px 80px;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px;
-}
-.fav-card{
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
-  padding: 18px; display: flex; gap: 14px; align-items: flex-start;
-}
-.fav-avatar{ width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0; }
-.fav-body{ flex: 1; min-width: 0; }
-.fav-name{ font-family: var(--font-display); font-weight: 600; font-size: 14.5px; }
-.fav-login{ color: var(--muted); font-size: 13px; }
-.fav-stats{ display: flex; gap: 12px; margin: 10px 0; font-size: 12.5px; color: var(--muted); }
-.fav-actions{ display: flex; gap: 8px; }
-.fav-actions .btn{ padding: 6px 10px; font-size: 12.5px; }
-
-.history-list{
-  max-width: var(--max-w); margin: 0 auto; padding: 0 24px 80px;
-  display: flex; flex-direction: column; gap: 1px; background: var(--border);
-  border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden;
-}
-.history-list:empty{ display: none; }
-.history-item{
-  background: var(--surface); display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; cursor: pointer; border: none; width: 100%; text-align: left;
-}
-.history-item:hover{ background: var(--surface-hover); }
-.history-user{ display: flex; align-items: center; gap: 12px; font-family: var(--font-display); font-size: 14px; }
-.history-time{ font-size: 12px; color: var(--muted-2); }
-
-.compare-form{
-  max-width: var(--max-w); margin: 0 auto; padding: 0 24px;
-  display: flex; gap: 12px; flex-wrap: wrap;
-}
-.compare-form .field-shell{ flex: 1; min-width: 200px; }
-.compare-skel, .compare-table-wrap{ max-width: var(--max-w); margin: 24px auto 80px; padding: 0 24px; }
-.compare-skel{ color: var(--muted); font-family: var(--font-display); font-size: 14px; }
-
-.compare-table{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
-.compare-table th, .compare-table td{ padding: 14px 18px; border-bottom: 1px solid var(--border); text-align: left; font-size: 14px; }
-.compare-table tr:last-child td{ border-bottom: none; }
-.compare-table th{ color: var(--muted); font-weight: 500; width: 40%; }
-.compare-head{ display: flex; align-items: center; gap: 10px; }
-.compare-head img{ width: 32px; height: 32px; border-radius: 50%; }
-.compare-win{ color: var(--primary); font-weight: 600; }
-
-.about-grid{
-  max-width: var(--max-w); margin: 0 auto; padding: 0 24px 80px;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
-}
-@media (max-width: 700px){ .about-grid{ grid-template-columns: 1fr; } }
-.tech-list{ display: flex; flex-wrap: wrap; gap: 8px; }
-.tech-list li{
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: 20px;
-  padding: 6px 12px; font-size: 13px; font-family: var(--font-display);
-}
-
-/* =========================================================
-   Footer
-   ========================================================= */
-.footer{ border-top: 1px solid var(--border); margin-top: 40px; }
-.footer-inner{
-  max-width: var(--max-w); margin: 0 auto; padding: 36px 24px;
-  display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap;
-}
-.footer-brand{ font-family: var(--font-display); font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.footer-tag{ color: var(--muted); font-size: 13px; margin-top: 6px; }
-.footer-built{ color: var(--muted-2); font-size: 12px; margin-top: 4px; }
-.footer-links{ display: flex; gap: 18px; flex-wrap: wrap; }
-.footer-links a, .footer-links button{
-  background: none; border: none; cursor: pointer; color: var(--muted);
-  font-size: 13px; padding: 0; text-decoration: none;
-}
-.footer-links a:hover, .footer-links button:hover{ color: var(--primary); }
-
-/* =========================================================
-   Toast
-   ========================================================= */
-.toast{
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
-  background: var(--surface); border: 1px solid var(--border-strong); color: var(--text);
-  padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13.5px;
-  opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .2s ease;
-  z-index: 300; box-shadow: 0 8px 24px rgba(0,0,0,.3);
-}
-.toast.show{ opacity: 1; transform: translateX(-50%) translateY(0); }
-
-/* =========================================================
-   Responsive nav
-   ========================================================= */
-@media (max-width: 780px){
-  .hamburger{ display: flex; }
-  .nav-links{
-    position: fixed; top: 61px; left: 0; right: 0; bottom: 0;
-    background: var(--bg); flex-direction: column; align-items: stretch;
-    padding: 12px 20px; gap: 2px; transform: translateX(100%);
-    transition: transform .2s ease; z-index: 90;
+  if(res.status === 403){
+    const remaining = res.headers.get('x-ratelimit-remaining');
+    if(remaining === '0'){
+      const err = new Error('rate_limit');
+      err.type = 'rate_limit';
+      throw err;
+    }
   }
-  .nav-links.open{ transform: translateX(0); }
-  .nav-link{ justify-content: flex-start; padding: 14px 8px; border-bottom: 1px solid var(--border); border-radius: 0; }
-  .profile-heading{ flex-direction: column; }
-  .repos-toolbar{ flex-direction: column; align-items: stretch; }
-  .repos-controls{ flex-direction: column; }
+  if(res.status === 404){
+    const err = new Error('not_found');
+    err.type = 'not_found';
+    throw err;
+  }
+  if(!res.ok){
+    const err = new Error('api_error');
+    err.type = 'api_error';
+    throw err;
+  }
+  return res.json();
 }
+
+async function fetchUser(username){
+  return githubFetch(`/users/${encodeURIComponent(username)}`);
+}
+
+async function fetchAllRepos(username){
+  // GitHub paginates at 100/page max; pull up to 300 repos (3 pages) — plenty for analysis.
+  let all = [];
+  for(let page = 1; page <= 3; page++){
+    const batch = await githubFetch(`/users/${encodeURIComponent(username)}/repos?per_page=100&page=${page}&sort=updated`);
+    all = all.concat(batch);
+    if(batch.length < 100) break;
+  }
+  return all;
+}
+
+/* =========================================================
+   Search flow
+   ========================================================= */
+async function searchUser(rawUsername, { pushHistory = true, updateUrl = true } = {}){
+  const username = (rawUsername || '').trim();
+  hideError();
+
+  if(!username){
+    showSearchError('Please enter a GitHub username.');
+    return;
+  }
+  if(!isValidUsername(username)){
+    showSearchError('That doesn\'t look like a valid GitHub username.');
+    return;
+  }
+
+  el.usernameInput.value = username;
+  el.results.hidden = false;
+  el.profileCard.hidden = true;
+  el.statsGrid.hidden = true;
+  el.insightsSection.hidden = true;
+  el.reposSection.hidden = true;
+  el.errorState.hidden = true;
+  showSkeleton(true);
+  el.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try{
+    const cacheKey = username.toLowerCase();
+    let user, repos;
+    const cached = state.userCache[cacheKey];
+
+    if(cached && (Date.now() - cached.ts) < 60000){
+      user = cached.user;
+      repos = cached.repos;
+    }else{
+      user = await fetchUser(username);
+      repos = await fetchAllRepos(username);
+      state.userCache[cacheKey] = { user, repos, ts: Date.now() };
+    }
+
+    state.currentUser = user;
+    state.repos = repos;
+    state.visibleRepoCount = state.repoPageSize;
+    state.repoFilter = '';
+    el.repoFilterInput.value = '';
+    state.repoSort = 'updated';
+    el.repoSort.value = 'updated';
+
+    displayProfile(user);
+    displayStats(user);
+    calculateInsights(repos);
+    calculateLanguages(repos);
+    displayRepositories();
+
+    if(pushHistory) saveHistory(user);
+    if(updateUrl) updateProfileUrl(user.login);
+
+  }catch(err){
+    showFetchError(err);
+  }finally{
+    showSkeleton(false);
+  }
+}
+
+function showSkeleton(on){
+  el.skeletonWrap.hidden = !on;
+}
+
+function showSearchError(msg){
+  el.searchError.textContent = msg;
+  el.searchError.hidden = false;
+}
+function hideError(){
+  el.searchError.hidden = true;
+}
+
+function showFetchError(err){
+  let title = 'Something went wrong';
+  let body = 'Please try again in a moment.';
+
+  if(err && err.type === 'not_found'){
+    title = 'GitHub user not found';
+    body = 'Check the username and try again.';
+  }else if(err && err.type === 'rate_limit'){
+    title = 'GitHub API rate limit reached';
+    body = 'GitHub limits unauthenticated requests. Please wait a bit and try again.';
+  }else if(!navigator.onLine){
+    title = 'Unable to connect to GitHub';
+    body = 'Check your internet connection and try again.';
+  }else{
+    title = 'Unable to connect to GitHub';
+    body = 'Something went wrong while reaching the GitHub API.';
+  }
+
+  el.errorTitle.textContent = title;
+  el.errorBody.textContent = body;
+  el.errorState.hidden = false;
+}
+
+/* =========================================================
+   Display: profile header
+   ========================================================= */
+function displayProfile(user){
+  el.pAvatar.src = user.avatar_url;
+  el.pAvatar.alt = `${user.login}'s avatar`;
+  el.pName.textContent = user.name || user.login;
+  el.pLogin.textContent = `@${user.login}`;
+  el.pLogin.href = user.html_url;
+
+  if(user.bio){
+    el.pBio.textContent = user.bio;
+    el.pBio.hidden = false;
+  }else{
+    el.pBio.hidden = true;
+  }
+
+  el.pMeta.innerHTML = '';
+  const metaItems = [];
+  if(user.location) metaItems.push(`<li>📍 ${escapeHTML(user.location)}</li>`);
+  if(user.company) metaItems.push(`<li>🏢 ${escapeHTML(user.company)}</li>`);
+  if(user.blog) {
+    const href = /^https?:\/\//.test(user.blog) ? user.blog : `https://${user.blog}`;
+    metaItems.push(`<li>🔗 <a href="${escapeHTML(href)}" target="_blank" rel="noopener">${escapeHTML(user.blog)}</a></li>`);
+  }
+  if(user.twitter_username) metaItems.push(`<li>🐦 <a href="https://x.com/${escapeHTML(user.twitter_username)}" target="_blank" rel="noopener">@${escapeHTML(user.twitter_username)}</a></li>`);
+  if(user.created_at) metaItems.push(`<li>🗓 Joined ${formatJoinDate(user.created_at)}</li>`);
+  el.pMeta.innerHTML = metaItems.join('');
+
+  el.viewGithubBtn.href = user.html_url;
+  el.profileCard.hidden = false;
+
+  updateFavButton();
+}
+
+/* =========================================================
+   Display: stats
+   ========================================================= */
+function displayStats(user){
+  el.statRepos.textContent = formatNumber(user.public_repos);
+  el.statFollowers.textContent = formatNumber(user.followers);
+  el.statFollowing.textContent = formatNumber(user.following);
+  el.statGists.textContent = formatNumber(user.public_gists);
+  el.statsGrid.hidden = false;
+}
+
+/* =========================================================
+   Insights (calculated from repo JSON)
+   ========================================================= */
+function computeRepoInsights(repos){
+  const owned = repos.filter(r => !r.fork);
+  const totalStars = repos.reduce((sum, r) => sum + (r.stargazers_count || 0), 0);
+  const totalForks = repos.reduce((sum, r) => sum + (r.forks_count || 0), 0);
+  const totalSizeKB = repos.reduce((sum, r) => sum + (r.size || 0), 0);
+  const mostStarred = repos.reduce((best, r) => (!best || (r.stargazers_count||0) > (best.stargazers_count||0)) ? r : best, null);
+  const avgStars = repos.length ? (totalStars / repos.length) : 0;
+
+  const langCounts = {};
+  repos.forEach(r => { if(r.language) langCounts[r.language] = (langCounts[r.language]||0) + 1; });
+  const topLang = Object.entries(langCounts).sort((a,b) => b[1]-a[1])[0];
+
+  return {
+    totalStars, totalForks, totalSizeKB, mostStarred, avgStars,
+    originalCount: owned.length,
+    topLanguage: topLang ? topLang[0] : null
+  };
+}
+
+function calculateInsights(repos){
+  if(!repos || repos.length === 0){
+    el.insightsSection.hidden = false;
+    el.insightsList.innerHTML = '<p class="empty-note">This user has no public repositories.</p>';
+    el.langBars.innerHTML = '';
+    el.langEmpty.hidden = false;
+    return;
+  }
+
+  const insights = computeRepoInsights(repos);
+  const sizeDisplay = insights.totalSizeKB > 1024
+    ? `${(insights.totalSizeKB/1024).toFixed(1)} MB`
+    : `${formatNumber(insights.totalSizeKB)} KB`;
+
+  const rows = [
+    ['Total stars received', formatNumber(insights.totalStars)],
+    ['Total forks', formatNumber(insights.totalForks)],
+    ['Original repositories', formatNumber(insights.originalCount)],
+    ['Average stars / repo', insights.avgStars.toFixed(1)],
+    ['Combined repo size', sizeDisplay],
+  ];
+  if(insights.mostStarred && (insights.mostStarred.stargazers_count||0) > 0){
+    rows.push(['Most starred repo', `${insights.mostStarred.name} (${formatNumber(insights.mostStarred.stargazers_count)}★)`]);
+  }
+  if(insights.topLanguage){
+    rows.push(['Most-used language', insights.topLanguage]);
+  }
+
+  el.insightsList.innerHTML = rows.map(([k,v]) => `
+    <div class="kv-row"><dt>${escapeHTML(k)}</dt><dd>${escapeHTML(String(v))}</dd></div>
+  `).join('');
+
+  el.insightsSection.hidden = false;
+}
+
+function calculateLanguages(repos){
+  const counts = {};
+  let total = 0;
+  repos.forEach(r => {
+    if(r.language){
+      counts[r.language] = (counts[r.language] || 0) + 1;
+      total++;
+    }
+  });
+
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 6);
+
+  if(sorted.length === 0){
+    el.langBars.innerHTML = '';
+    el.langEmpty.hidden = false;
+    return;
+  }
+  el.langEmpty.hidden = true;
+
+  el.langBars.innerHTML = sorted.map(([name, count]) => {
+    const pct = total ? Math.round((count/total)*100) : 0;
+    return `
+      <div class="lang-row">
+        <span class="lang-name">${escapeHTML(name)}</span>
+        <div class="lang-track"><div class="lang-fill" style="width:${pct}%; background:${langColor(name)}"></div></div>
+        <span class="lang-pct">${pct}%</span>
+      </div>
+    `;
+  }).join('');
+}
+
+/* =========================================================
+   Repositories: sort / filter / render / pagination
+   ========================================================= */
+function sortRepositories(repos, sortBy){
+  const copy = [...repos];
+  switch(sortBy){
+    case 'stars': return copy.sort((a,b) => (b.stargazers_count||0) - (a.stargazers_count||0));
+    case 'forks': return copy.sort((a,b) => (b.forks_count||0) - (a.forks_count||0));
+    case 'name': return copy.sort((a,b) => a.name.localeCompare(b.name));
+    case 'updated':
+    default: return copy.sort((a,b) => new Date(b.updated_at) - new Date(a.updated_at));
+  }
+}
+
+function filterRepositories(repos, query){
+  if(!query) return repos;
+  const q = query.toLowerCase();
+  return repos.filter(r =>
+    r.name.toLowerCase().includes(q) ||
+    (r.description && r.description.toLowerCase().includes(q))
+  );
+}
+
+function displayRepositories(){
+  const filtered = filterRepositories(state.repos, state.repoFilter);
+  const sorted = sortRepositories(filtered, state.repoSort);
+
+  el.repoCountPill.textContent = formatNumber(filtered.length);
+
+  if(state.repos.length === 0){
+    el.reposSection.hidden = false;
+    el.repoGrid.innerHTML = '';
+    el.repoEmpty.textContent = 'This user has no public repositories.';
+    el.repoEmpty.hidden = false;
+    el.loadMoreBtn.hidden = true;
+    return;
+  }
+
+  if(sorted.length === 0){
+    el.repoGrid.innerHTML = '';
+    el.repoEmpty.textContent = 'No repositories match your filter.';
+    el.repoEmpty.hidden = false;
+    el.loadMoreBtn.hidden = true;
+    el.reposSection.hidden = false;
+    return;
+  }
+
+  el.repoEmpty.hidden = true;
+  const visible = sorted.slice(0, state.visibleRepoCount);
+  el.repoGrid.innerHTML = visible.map(repoCardHTML).join('');
+  el.loadMoreBtn.hidden = sorted.length <= visible.length;
+  el.reposSection.hidden = false;
+}
+
+function repoCardHTML(repo){
+  const lang = repo.language;
+  const desc = repo.description ? escapeHTML(repo.description) : 'No description provided.';
+  return `
+    <article class="repo-card" style="border-left-color:${lang ? langColor(lang) : 'var(--border-strong)'}">
+      <div class="repo-head">
+        <a class="repo-name" href="${repo.html_url}" target="_blank" rel="noopener">${escapeHTML(repo.name)}</a>
+        <span class="repo-visibility">${repo.private ? 'Private' : 'Public'}</span>
+      </div>
+      <p class="repo-desc">${desc}</p>
+      <div class="repo-meta">
+        ${lang ? `<span><span class="lang-dot" style="background:${langColor(lang)}"></span>${escapeHTML(lang)}</span>` : ''}
+        <span>⭐ ${formatNumber(repo.stargazers_count)}</span>
+        <span>🍴 ${formatNumber(repo.forks_count)}</span>
+        ${repo.open_issues_count ? `<span>◔ ${formatNumber(repo.open_issues_count)} issues</span>` : ''}
+      </div>
+      <div class="repo-foot">
+        <span class="repo-updated">Updated ${timeAgo(repo.updated_at)}</span>
+        <a class="repo-link" href="${repo.html_url}" target="_blank" rel="noopener">View repository →</a>
+      </div>
+    </article>
+  `;
+}
+
+/* =========================================================
+   Favorites
+   ========================================================= */
+function isFavorite(login){
+  return state.favorites.some(f => f.login.toLowerCase() === login.toLowerCase());
+}
+function saveFavorite(user){
+  if(isFavorite(user.login)) return;
+  state.favorites.unshift({
+    login: user.login,
+    name: user.name,
+    avatar_url: user.avatar_url,
+    followers: user.followers,
+    public_repos: user.public_repos,
+    html_url: user.html_url
+  });
+  saveJSON('gitview:favorites', state.favorites);
+  renderFavCount();
+}
+function removeFavorite(login){
+  state.favorites = state.favorites.filter(f => f.login.toLowerCase() !== login.toLowerCase());
+  saveJSON('gitview:favorites', state.favorites);
+  renderFavCount();
+  renderFavoritesView();
+  if(state.currentUser && state.currentUser.login.toLowerCase() === login.toLowerCase()){
+    updateFavButton();
+  }
+}
+function updateFavButton(){
+  if(!state.currentUser) return;
+  const fav = isFavorite(state.currentUser.login);
+  el.favIcon.textContent = fav ? '★' : '☆';
+  el.favLabel.textContent = fav ? 'Saved' : 'Add to favorites';
+  el.favBtn.classList.toggle('active', fav);
+}
+function renderFavCount(){
+  el.favCount.textContent = state.favorites.length;
+}
+function renderFavoritesView(){
+  if(state.favorites.length === 0){
+    el.favoritesGrid.innerHTML = '';
+    el.favEmptyNote.hidden = false;
+    return;
+  }
+  el.favEmptyNote.hidden = true;
+  el.favoritesGrid.innerHTML = state.favorites.map(f => `
+    <article class="fav-card">
+      <img class="fav-avatar" src="${f.avatar_url}" alt="${escapeHTML(f.login)}'s avatar">
+      <div class="fav-body">
+        <p class="fav-name">${escapeHTML(f.name || f.login)}</p>
+        <p class="fav-login">@${escapeHTML(f.login)}</p>
+        <div class="fav-stats">
+          <span>${formatNumber(f.followers)} followers</span>
+          <span>${formatNumber(f.public_repos)} repos</span>
+        </div>
+        <div class="fav-actions">
+          <button class="btn btn-primary" data-open-profile="${escapeHTML(f.login)}">Open profile</button>
+          <button class="btn btn-ghost" data-remove-fav="${escapeHTML(f.login)}">Remove</button>
+        </div>
+      </div>
+    </article>
+  `).join('');
+}
+
+/* =========================================================
+   History
+   ========================================================= */
+function saveHistory(user){
+  state.history = state.history.filter(h => h.login.toLowerCase() !== user.login.toLowerCase());
+  state.history.unshift({ login: user.login, avatar_url: user.avatar_url, ts: Date.now() });
+  state.history = state.history.slice(0, 10);
+  saveJSON('gitview:history', state.history);
+  renderRecentStrip();
+}
+function clearHistory(){
+  state.history = [];
+  saveJSON('gitview:history', state.history);
+  renderRecentStrip();
+  renderHistoryView();
+}
+function renderRecentStrip(){
+  if(state.history.length === 0){
+    el.recentStrip.hidden = true;
+    return;
+  }
+  el.recentStrip.hidden = false;
+  el.recentChips.innerHTML = state.history.slice(0,6).map(h =>
+    `<button class="chip" data-open-profile="${escapeHTML(h.login)}">${escapeHTML(h.login)}</button>`
+  ).join('');
+}
+function renderHistoryView(){
+  if(state.history.length === 0){
+    el.historyList.innerHTML = '';
+    el.historyEmptyNote.hidden = false;
+    return;
+  }
+  el.historyEmptyNote.hidden = true;
+  el.historyList.innerHTML = state.history.map(h => `
+    <li>
+      <button class="history-item" data-open-profile="${escapeHTML(h.login)}">
+        <span class="history-user"><img src="${h.avatar_url}" alt="" style="width:28px;height:28px;border-radius:50%"> @${escapeHTML(h.login)}</span>
+        <span class="history-time">${timeAgo(new Date(h.ts).toISOString())}</span>
+      </button>
+    </li>
+  `).join('');
+}
+
+/* =========================================================
+   Compare
+   ========================================================= */
+async function compareUsers(usernameA, usernameB){
+  el.compareError.hidden = true;
+  el.compareResult.hidden = true;
+  el.compareSkel.hidden = false;
+
+  try{
+    const [userA, reposA] = await Promise.all([fetchUser(usernameA), fetchAllRepos(usernameA)]);
+    const [userB, reposB] = await Promise.all([fetchUser(usernameB), fetchAllRepos(usernameB)]);
+
+    const insightsA = computeRepoInsights(reposA);
+    const insightsB = computeRepoInsights(reposB);
+
+    const rows = [
+      ['Followers', formatNumber(userA.followers), formatNumber(userB.followers), userA.followers, userB.followers],
+      ['Following', formatNumber(userA.following), formatNumber(userB.following), userA.following, userB.following],
+      ['Repositories', formatNumber(userA.public_repos), formatNumber(userB.public_repos), userA.public_repos, userB.public_repos],
+      ['Public gists', formatNumber(userA.public_gists), formatNumber(userB.public_gists), userA.public_gists, userB.public_gists],
+      ['Total stars', formatNumber(insightsA.totalStars), formatNumber(insightsB.totalStars), insightsA.totalStars, insightsB.totalStars],
+      ['Total forks', formatNumber(insightsA.totalForks), formatNumber(insightsB.totalForks), insightsA.totalForks, insightsB.totalForks],
+      ['Top language', insightsA.topLanguage || '—', insightsB.topLanguage || '—', null, null],
+    ];
+
+    el.compareResult.innerHTML = `
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th><div class="compare-head"><img src="${userA.avatar_url}" alt=""> @${escapeHTML(userA.login)}</div></th>
+            <th><div class="compare-head"><img src="${userB.avatar_url}" alt=""> @${escapeHTML(userB.login)}</div></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(([label, aDisp, bDisp, aVal, bVal]) => {
+            const aWin = aVal !== null && aVal > bVal;
+            const bWin = bVal !== null && bVal > aVal;
+            return `<tr>
+              <th>${escapeHTML(label)}</th>
+              <td class="${aWin ? 'compare-win' : ''}">${escapeHTML(String(aDisp))}</td>
+              <td class="${bWin ? 'compare-win' : ''}">${escapeHTML(String(bDisp))}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+    el.compareResult.hidden = false;
+  }catch(err){
+    let msg = 'Could not compare these profiles. Check both usernames and try again.';
+    if(err && err.type === 'not_found') msg = 'One of these usernames was not found on GitHub.';
+    if(err && err.type === 'rate_limit') msg = 'GitHub API rate limit reached. Please try again later.';
+    el.compareError.textContent = msg;
+    el.compareError.hidden = false;
+  }finally{
+    el.compareSkel.hidden = true;
+  }
+}
+
+/* =========================================================
+   URL / sharing
+   ========================================================= */
+function updateProfileUrl(username){
+  const url = new URL(window.location.href);
+  url.searchParams.set('user', username);
+  window.history.replaceState({}, '', url);
+}
+function copyProfileLink(){
+  const url = new URL(window.location.href);
+  if(state.currentUser) url.searchParams.set('user', state.currentUser.login);
+  navigator.clipboard.writeText(url.toString())
+    .then(() => showToast('✓ Link copied!'))
+    .catch(() => showToast('Could not copy link'));
+}
+
+/* =========================================================
+   Theme
+   ========================================================= */
+function toggleTheme(){
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  setTheme(isLight ? 'dark' : 'light');
+}
+function setTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('gitview:theme', theme);
+  el.iconMoon.hidden = theme === 'light';
+  el.iconSun.hidden = theme !== 'light';
+}
+
+/* =========================================================
+   View / nav routing
+   ========================================================= */
+const VIEWS = ['explore','favorites','history','compare','about'];
+function showView(name){
+  VIEWS.forEach(v => {
+    const section = document.getElementById(`view-${v}`);
+    if(section) section.hidden = (v !== name);
+  });
+  document.querySelectorAll('.nav-link').forEach(btn => {
+    const isActive = btn.dataset.nav === name;
+    if(isActive) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
+  });
+  el.navLinks.classList.remove('open');
+  el.hamburger.setAttribute('aria-expanded', 'false');
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+
+  if(name === 'favorites') renderFavoritesView();
+  if(name === 'history') renderHistoryView();
+}
+
+/* =========================================================
+   Event wiring
+   ========================================================= */
+function init(){
+  // theme
+  const savedTheme = localStorage.getItem('gitview:theme') ||
+    (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  setTheme(savedTheme);
+
+  renderFavCount();
+  renderRecentStrip();
+
+  // search
+  el.searchForm.addEventListener('submit', e => {
+    e.preventDefault();
+    searchUser(el.usernameInput.value);
+  });
+  document.querySelectorAll('[data-try]').forEach(btn => {
+    btn.addEventListener('click', () => searchUser(btn.dataset.try));
+  });
+
+  // repo controls
+  let filterDebounce;
+  el.repoFilterInput.addEventListener('input', () => {
+    clearTimeout(filterDebounce);
+    filterDebounce = setTimeout(() => {
+      state.repoFilter = el.repoFilterInput.value.trim();
+      state.visibleRepoCount = state.repoPageSize;
+      displayRepositories();
+    }, 200);
+  });
+  el.repoSort.addEventListener('change', () => {
+    state.repoSort = el.repoSort.value;
+    displayRepositories();
+  });
+  el.loadMoreBtn.addEventListener('click', () => {
+    state.visibleRepoCount += state.repoPageSize;
+    displayRepositories();
+  });
+
+  // favorites / link
+  el.favBtn.addEventListener('click', () => {
+    if(!state.currentUser) return;
+    if(isFavorite(state.currentUser.login)) removeFavorite(state.currentUser.login);
+    else { saveFavorite(state.currentUser); updateFavButton(); showToast('Added to favorites'); }
+  });
+  el.copyLinkBtn.addEventListener('click', copyProfileLink);
+
+  // delegated clicks: open-profile / remove-fav buttons that render dynamically
+  document.body.addEventListener('click', e => {
+    const openBtn = e.target.closest('[data-open-profile]');
+    if(openBtn){
+      showView('explore');
+      searchUser(openBtn.dataset.openProfile);
+      return;
+    }
+    const removeBtn = e.target.closest('[data-remove-fav]');
+    if(removeBtn){
+      removeFavorite(removeBtn.dataset.removeFav);
+      showToast('Removed from favorites');
+      return;
+    }
+  });
+
+  // history
+  el.clearHistoryBtn.addEventListener('click', clearHistory);
+
+  // compare
+  el.compareForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const a = el.compareUserA.value.trim();
+    const b = el.compareUserB.value.trim();
+    if(!a || !b){
+      el.compareError.textContent = 'Enter both usernames to compare.';
+      el.compareError.hidden = false;
+      return;
+    }
+    compareUsers(a, b);
+  });
+
+  // theme toggle
+  el.themeToggle.addEventListener('click', toggleTheme);
+
+  // nav
+  document.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.addEventListener('click', () => showView(btn.dataset.nav));
+  });
+  el.hamburger.addEventListener('click', () => {
+    const open = el.navLinks.classList.toggle('open');
+    el.hamburger.setAttribute('aria-expanded', String(open));
+  });
+  el.backToTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+  // load profile from URL if present
+  const params = new URLSearchParams(window.location.search);
+  const userFromUrl = params.get('user');
+  if(userFromUrl){
+    searchUser(userFromUrl, { updateUrl: false });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
