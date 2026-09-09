@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitView — Explore GitHub Profiles</title>
+<meta name="description" content="Search, analyze and explore public GitHub profiles and repositories in one place.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>&%2360;/&%3E</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ============ NAV ============ -->
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a href="#" class="brand" data-nav="home" aria-label="GitView home">
+      <span class="brand-mark">&gt;_</span><span class="brand-name">GitView</span>
+    </a>
+
+    <nav class="nav-links" id="navLinks" aria-label="Primary">
+      <button class="nav-link" data-nav="explore" aria-current="page">Explore</button>
+      <button class="nav-link" data-nav="favorites">Favorites <span class="pill" id="favCount">0</span></button>
+      <button class="nav-link" data-nav="history">History</button>
+      <button class="nav-link" data-nav="compare">Compare</button>
+      <button class="nav-link" data-nav="about">About</button>
+    </nav>
+
+    <div class="nav-actions">
+      <button class="icon-btn" id="themeToggle" aria-label="Toggle dark and light theme" title="Toggle theme">
+        <svg id="iconMoon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg id="iconSun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============ HERO / SEARCH VIEW ============ -->
+  <section class="view" id="view-explore">
+
+    <section class="hero" id="heroSection">
+      <div class="hero-inner">
+        <p class="hero-eyebrow">git log --author=you --since=always</p>
+        <h1 class="hero-title">Explore GitHub profiles<br>like never before.</h1>
+        <p class="hero-sub">Search any public GitHub profile and uncover their repositories, languages, and developer statistics — pulled live from the GitHub REST API.</p>
+
+        <form class="search-shell" id="searchForm" role="search" aria-label="Search GitHub username">
+          <span class="prompt-glyph" aria-hidden="true">$</span>
+          <span class="prompt-cmd">gitview search</span>
+          <input
+            type="text"
+            id="usernameInput"
+            class="search-input"
+            placeholder="octocat"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="GitHub username">
+          <button type="submit" class="btn btn-primary search-btn">
+            <span>Explore profile</span>
+          </button>
+        </form>
+        <p class="hero-hint">Try: <button class="hint-link" data-try="octocat">octocat</button> · <button class="hint-link" data-try="torvalds">torvalds</button> · <button class="hint-link" data-try="sindresorhus">sindresorhus</button></p>
+        <p class="search-error" id="searchError" role="alert" hidden></p>
+      </div>
+    </section>
+
+    <!-- Recent chips under hero, shown once history exists -->
+    <div class="recent-strip" id="recentStrip" hidden>
+      <span class="recent-label">Recent</span>
+      <div class="recent-chips" id="recentChips"></div>
+    </div>
+
+    <!-- ============ RESULTS ============ -->
+    <section class="results" id="results" hidden>
+
+      <!-- Skeleton loading state -->
+      <div class="skeleton-wrap" id="skeletonWrap" hidden aria-hidden="true">
+        <div class="skel skel-avatar"></div>
+        <div class="skel-lines">
+          <div class="skel skel-line w60"></div>
+          <div class="skel skel-line w40"></div>
+          <div class="skel skel-line w80"></div>
+        </div>
+      </div>
+
+      <!-- Profile header -->
+      <article class="profile-card" id="profileCard" hidden>
+        <img class="avatar" id="pAvatar" src="" alt="">
+        <div class="profile-main">
+          <div class="profile-heading">
+            <div>
+              <h2 class="profile-name" id="pName"></h2>
+              <a class="profile-login" id="pLogin" target="_blank" rel="noopener"></a>
+            </div>
+            <div class="profile-actions">
+              <button class="btn btn-ghost" id="favBtn">
+                <span id="favIcon">☆</span> <span id="favLabel">Add to favorites</span>
+              </button>
+              <button class="btn btn-ghost" id="copyLinkBtn">🔗 Copy profile link</button>
+              <a class="btn btn-primary" id="viewGithubBtn" target="_blank" rel="noopener">View on GitHub</a>
+            </div>
+          </div>
+          <p class="profile-bio" id="pBio" hidden></p>
+          <ul class="profile-meta" id="pMeta"></ul>
+        </div>
+      </article>
+
+      <!-- Stat cards -->
+      <section class="stats-grid" id="statsGrid" hidden aria-label="Profile statistics">
+        <div class="stat-card">
+          <span class="stat-value" id="statRepos">0</span>
+          <span class="stat-label">Repositories</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value" id="statFollowers">0</span>
+          <span class="stat-label">Followers</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value" id="statFollowing">0</span>
+          <span class="stat-label">Following</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value" id="statGists">0</span>
+          <span class="stat-label">Public gists</span>
+        </div>
+      </section>
+
+      <!-- Developer insights -->
+      <section class="panel-grid" id="insightsSection" hidden>
+        <div class="panel">
+          <h3 class="panel-title">Top languages</h3>
+          <div class="lang-bars" id="langBars"></div>
+          <p class="empty-note" id="langEmpty" hidden>No language data available yet.</p>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">Developer overview</h3>
+          <dl class="kv-list" id="insightsList"></dl>
+        </div>
+      </section>
+
+      <!-- Repositories -->
+      <section class="repos-section" id="reposSection" hidden>
+        <div class="repos-toolbar">
+          <h3 class="panel-title">Repositories <span class="pill" id="repoCountPill">0</span></h3>
+          <div class="repos-controls">
+            <div class="field-shell">
+              <span aria-hidden="true">🔍</span>
+              <input type="text" id="repoFilterInput" class="field-input" placeholder="Filter repositories…" aria-label="Filter repositories by name or description">
+            </div>
+            <label class="select-shell">
+              <span class="select-label">Sort by</span>
+              <select id="repoSort" aria-label="Sort repositories">
+                <option value="updated">Recently updated</option>
+                <option value="stars">Most stars</option>
+                <option value="forks">Most forks</option>
+                <option value="name">Name</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="repo-grid" id="repoGrid"></div>
+        <p class="empty-note" id="repoEmpty" hidden>No repositories match your filter.</p>
+        <div class="load-more-wrap">
+          <button class="btn btn-ghost" id="loadMoreBtn" hidden>Load more repositories</button>
+        </div>
+      </section>
+
+      <!-- Error state -->
+      <div class="state-card state-error" id="errorState" hidden>
+        <p class="state-title" id="errorTitle">Something went wrong</p>
+        <p class="state-body" id="errorBody"></p>
+      </div>
+    </section>
+
+  </section>
+
+  <!-- ============ FAVORITES VIEW ============ -->
+  <section class="view" id="view-favorites" hidden>
+    <div class="page-head">
+      <h2>Favorites</h2>
+      <p>Profiles you've saved for quick access. Stored locally in this browser.</p>
+    </div>
+    <div class="favorites-grid" id="favoritesGrid"></div>
+    <p class="empty-note" id="favEmptyNote">You haven't saved any profiles yet. Search a username and tap "Add to favorites".</p>
+  </section>
+
+  <!-- ============ HISTORY VIEW ============ -->
+  <section class="view" id="view-history" hidden>
+    <div class="page-head">
+      <h2>Recent searches</h2>
+      <p>Your last 10 searches on this device.</p>
+      <button class="btn btn-ghost" id="clearHistoryBtn">Clear history</button>
+    </div>
+    <ul class="history-list" id="historyList"></ul>
+    <p class="empty-note" id="historyEmptyNote">No searches yet. Your history will show up here.</p>
+  </section>
+
+  <!-- ============ COMPARE VIEW ============ -->
+  <section class="view" id="view-compare" hidden>
+    <div class="page-head">
+      <h2>Compare developers</h2>
+      <p>Put two public GitHub profiles side by side.</p>
+    </div>
+
+    <form class="compare-form" id="compareForm">
+      <div class="field-shell">
+        <span aria-hidden="true">A</span>
+        <input type="text" id="compareUserA" class="field-input" placeholder="First username" aria-label="First username to compare">
+      </div>
+      <div class="field-shell">
+        <span aria-hidden="true">B</span>
+        <input type="text" id="compareUserB" class="field-input" placeholder="Second username" aria-label="Second username to compare">
+      </div>
+      <button type="submit" class="btn btn-primary">Compare</button>
+    </form>
+
+    <p class="search-error" id="compareError" role="alert" hidden></p>
+    <div class="compare-skel" id="compareSkel" hidden>Fetching both profiles…</div>
+    <div class="compare-table-wrap" id="compareResult" hidden></div>
+  </section>
+
+  <!-- ============ ABOUT VIEW ============ -->
+  <section class="view" id="view-about" hidden>
+    <div class="page-head">
+      <h2>What is GitView?</h2>
+      <p>GitView is a GitHub profile exploration tool that queries the public GitHub REST API to retrieve and visualize developer information — profiles, repositories, languages and activity — entirely in your browser.</p>
+    </div>
+
+    <div class="about-grid">
+      <div class="panel">
+        <h3 class="panel-title">Technologies</h3>
+        <ul class="tech-list">
+          <li>HTML5</li>
+          <li>CSS3</li>
+          <li>JavaScript (ES6+)</li>
+          <li>JSON</li>
+          <li>REST API</li>
+          <li>Fetch API</li>
+          <li>LocalStorage</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3 class="panel-title">Data source</h3>
+        <p>All data is fetched live from the <a href="https://docs.github.com/en/rest" target="_blank" rel="noopener">GitHub REST API</a>. Nothing is stored on a server — favorites, history and theme live in your browser's local storage only.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div>
+      <p class="footer-brand"><span class="brand-mark">&gt;_</span> GitView</p>
+      <p class="footer-tag">Explore GitHub profiles. Discover great developers.</p>
+      <p class="footer-built">Built with HTML, CSS &amp; JavaScript · Powered by the GitHub API</p>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="https://github.com" target="_blank" rel="noopener">GitHub</a>
+      <button data-nav="about">About</button>
+      <button data-nav="favorites">Favorites</button>
+      <button id="backToTop">Back to top</button>
+    </nav>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
