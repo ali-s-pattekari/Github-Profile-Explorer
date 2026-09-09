@@ -93,14 +93,26 @@ input, select{ font: inherit; color: inherit; }
    ========================================================= */
 .nav{
   position: sticky; top: 0; z-index: 100;
+  border-bottom: 1px solid var(--border);
+}
+/* The blur lives on a ::before layer, not on .nav itself. If .nav carried
+   backdrop-filter directly, it would become the "containing block" for any
+   position:fixed descendant — including the mobile .nav-links panel — which
+   pins that panel to the ~60px navbar height instead of the full screen and
+   makes it collapse to nothing when opened. Keeping the filter off .nav
+   avoids that trap while still giving the same frosted-glass look. */
+.nav::before{
+  content: "";
+  position: absolute; inset: 0;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
+  z-index: -1;
 }
 .nav-inner{
   max-width: var(--max-w); margin: 0 auto;
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 24px;
+  position: relative;
 }
 .brand{
   display: flex; align-items: center; gap: 8px;
@@ -246,7 +258,7 @@ input, select{ font: inherit; color: inherit; }
 .results{ max-width: var(--max-w); margin: 0 auto; padding: 0 24px 96px; }
 
 /* Skeleton */
-/* .skeleton-wrap{ display: flex; gap: 20px; padding: 28px 0; } */
+.skeleton-wrap{ display: flex; gap: 20px; padding: 28px 0; }
 .skel{
   background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 37%, var(--surface) 63%);
   background-size: 400% 100%; animation: shimmer 1.4s ease infinite;
