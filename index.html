@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -49,6 +49,7 @@
 
     <section class="hero" id="heroSection">
       <div class="hero-inner">
+        <p class="hero-eyebrow">git log --author=you --since=always</p>
         <h1 class="hero-title">Explore GitHub profiles<br>like never before.</h1>
         <p class="hero-sub">Search any public GitHub profile and uncover their repositories, languages, and developer statistics — pulled live from the GitHub REST API.</p>
 
@@ -237,7 +238,18 @@
     </div>
 
     <div class="about-grid">
-    
+      <div class="panel">
+        <h3 class="panel-title">Technologies</h3>
+        <ul class="tech-list">
+          <li>HTML5</li>
+          <li>CSS3</li>
+          <li>JavaScript (ES6+)</li>
+          <li>JSON</li>
+          <li>REST API</li>
+          <li>Fetch API</li>
+          <li>LocalStorage</li>
+        </ul>
+      </div>
       <div class="panel">
         <h3 class="panel-title">Data source</h3>
         <p>All data is fetched live from the <a href="https://docs.github.com/en/rest" target="_blank" rel="noopener">GitHub REST API</a>. Nothing is stored on a server — favorites, history and theme live in your browser's local storage only.</p>
@@ -252,7 +264,7 @@
     <div>
       <p class="footer-brand"><span class="brand-mark">&gt;_</span> GitView</p>
       <p class="footer-tag">Explore GitHub profiles. Discover great developers.</p>
-      <!-- <p class="footer-built">Built with HTML, CSS &amp; JavaScript · Powered by the GitHub API</p> -->
+      <p class="footer-built">Built with HTML, CSS &amp; JavaScript · Powered by the GitHub API</p>
     </div>
     <nav class="footer-links" aria-label="Footer">
       <a href="https://github.com" target="_blank" rel="noopener">GitHub</a>
